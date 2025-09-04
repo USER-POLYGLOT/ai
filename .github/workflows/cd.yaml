@@ -1,70 +1,55 @@
 name: CD - AI Microservice
 
-# Trigger manually or optionally after CI
+# Trigger CD after the CI workflow finishes successfully
 on:
-  workflow_dispatch:
-  push:
-    branches: [ "main" ]
+  workflow_run:
+    workflows: ["CI - Spring Boot Translate Service"]
+    types:
+      - completed
 
 jobs:
-  # -----------------------------
-  # Job 1: Optional Docker pull/push (CI already does this)
-  # -----------------------------
-  docker:
-    runs-on: ubuntu-latest
+  deploy:
+    # Only run if the CI workflow was successful
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: self-hosted  # your self-hosted runner
+
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+
     steps:
+      # 1️⃣ Checkout the repo (optional if only kubectl is needed)
       - name: Checkout Repo
         uses: actions/checkout@v4
 
+      # 2️⃣ Log in to Docker Hub
       - name: Docker Login
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      # Optional: Pull latest image (can be skipped if CI already pushed)
-      - name: Pull Latest Docker Image
-        run: docker pull anubhav1404/user-ai-service:${{ github.sha }}
-
-  # -----------------------------
-  # Job 2: Kubernetes Deployment
-  # -----------------------------
-  k8s-deploy:
-    needs: docker
-    runs-on: self-hosted   # your self-hosted runner with kubectl access
-
-    env:
-      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-      AWS_REGION: ${{ secrets.AWS_REGION }}
-      DOCKER_IMAGE_SHA: anubhav1404/user-ai-service:${{ github.sha }}
-      DOCKER_IMAGE_LATEST: anubhav1404/user-ai-service:latest
-
-    steps:
-      - name: Checkout Repo
-        uses: actions/checkout@v4
-
-      # 1️⃣ Create/update Kubernetes secret for AWS credentials
-      - name: Create AWS Secret in Kubernetes
+      # 3️⃣ Pull the Docker image built by CI
+      - name: Pull Docker Image
         run: |
-          kubectl create secret generic aws-credentials \
-            --from-literal=accessKey=${AWS_ACCESS_KEY_ID} \
-            --from-literal=secretKey=${AWS_SECRET_ACCESS_KEY} \
-            --dry-run=client -o yaml | kubectl apply -f -
+          docker pull anubhav1404/user-ai-service:${{ github.event.workflow_run.head_sha }}
+          docker pull anubhav1404/user-ai-service:latest
 
-      # 2️⃣ Update AI Deployment with the latest image
+      # 4️⃣ Create/update AWS credentials secret in Kubernetes (if not exists)
+      - name: Apply AWS Secret
+        run: |
+          kubectl get secret aws-credentials || \
+          kubectl create secret generic aws-credentials \
+            --from-literal=accessKey=${{ secrets.AWS_ACCESS_KEY_ID }} \
+            --from-literal=secretKey=${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+      # 5️⃣ Update AI service deployment with new Docker image
       - name: Update AI Deployment
         run: |
           kubectl set image deployment/ai-service \
-            ai-service=${DOCKER_IMAGE_SHA}
+            ai-service=anubhav1404/user-ai-service:${{ github.event.workflow_run.head_sha }}
 
-      # 3️⃣ Wait for rollout to complete
-      - name: Wait for AI Rollout
-        run: kubectl rollout status deployment/ai-service
-
-      # 4️⃣ Optional: Tag deployment with latest
-      - name: Update AI Deployment 'latest' tag
+      # 6️⃣ Wait for rollout to complete
+      - name: Wait for Rollout
         run: |
-          kubectl set image deployment/ai-service \
-            ai-service=${DOCKER_IMAGE_LATEST}
           kubectl rollout status deployment/ai-service
