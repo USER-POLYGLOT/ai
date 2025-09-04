@@ -1,0 +1,70 @@
+name: CD - AI Microservice
+
+# Trigger manually or optionally after CI
+on:
+  workflow_dispatch:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  # -----------------------------
+  # Job 1: Optional Docker pull/push (CI already does this)
+  # -----------------------------
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@v4
+
+      - name: Docker Login
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # Optional: Pull latest image (can be skipped if CI already pushed)
+      - name: Pull Latest Docker Image
+        run: docker pull anubhav1404/user-ai-service:${{ github.sha }}
+
+  # -----------------------------
+  # Job 2: Kubernetes Deployment
+  # -----------------------------
+  k8s-deploy:
+    needs: docker
+    runs-on: self-hosted   # your self-hosted runner with kubectl access
+
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_REGION: ${{ secrets.AWS_REGION }}
+      DOCKER_IMAGE_SHA: anubhav1404/user-ai-service:${{ github.sha }}
+      DOCKER_IMAGE_LATEST: anubhav1404/user-ai-service:latest
+
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@v4
+
+      # 1️⃣ Create/update Kubernetes secret for AWS credentials
+      - name: Create AWS Secret in Kubernetes
+        run: |
+          kubectl create secret generic aws-credentials \
+            --from-literal=accessKey=${AWS_ACCESS_KEY_ID} \
+            --from-literal=secretKey=${AWS_SECRET_ACCESS_KEY} \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      # 2️⃣ Update AI Deployment with the latest image
+      - name: Update AI Deployment
+        run: |
+          kubectl set image deployment/ai-service \
+            ai-service=${DOCKER_IMAGE_SHA}
+
+      # 3️⃣ Wait for rollout to complete
+      - name: Wait for AI Rollout
+        run: kubectl rollout status deployment/ai-service
+
+      # 4️⃣ Optional: Tag deployment with latest
+      - name: Update AI Deployment 'latest' tag
+        run: |
+          kubectl set image deployment/ai-service \
+            ai-service=${DOCKER_IMAGE_LATEST}
+          kubectl rollout status deployment/ai-service
