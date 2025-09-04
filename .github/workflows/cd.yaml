@@ -2,7 +2,7 @@ name: CD - Spring Boot Translate Service
 
 on:
   workflow_run:
-    workflows: ["CI - Spring Boot Translate Service"]   # must match your CI workflow name
+    workflows: ["CI - Spring Boot Translate Service"]   # must match your CI 
     types:
       - completed
 
