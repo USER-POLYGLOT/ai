@@ -35,4 +35,4 @@ jobs:
       # Verify rollout of translate service
       - name: Verify rollout
         run: |
-          kubectl rollout status deployment/ai-deployment
+          kubectl rollout status deployment/ai-service
