@@ -1,38 +1,97 @@
-name: CD - Spring Boot Translate Service
+name: CI - Spring Boot Translate Service
 
 on:
-  workflow_run:
-    workflows: ["CI - Spring Boot Translate Service"]   # must match your CI workflow name
-    types:
-      - completed
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
 
 jobs:
-  deploy:
-    if: ${{ github.event.workflow_run.conclusion == 'success' }}
-    runs-on: self-hosted   # runner must have kubectl + kubeconfig configured
+  ci:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+      security-events: write
+      actions: read
 
     steps:
-      # Checkout repo at the commit that CI built
-      - name: Checkout code
+      # 1️⃣ Checkout code
+      - name: Checkout Code
         uses: actions/checkout@v4
         with:
-          repository: ${{ github.event.workflow_run.head_repository.full_name }}
-          ref: ${{ github.event.workflow_run.head_sha }}
+          token: ${{ secrets.GITHUB_TOKEN }}
 
-      # Configure AWS secret in Kubernetes (replace if exists)
-      - name: Configure AWS Secret for K8s
-        run: |
-          kubectl delete secret aws-credentials --ignore-not-found
-          kubectl create secret generic aws-credentials \
-            --from-literal=accessKey=${{ secrets.AWS_ACCESS_KEY_ID }} \
-            --from-literal=secretKey=${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      # 2️⃣ Set up JDK 17
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
 
-      # Apply Kubernetes manifests
-      - name: Apply Kubernetes manifests
-        run: |
-          kubectl apply -f kubernetes/
+      # 3️⃣ Run Checkstyle
+      - name: Run Linter
+        run: ./mvnw checkstyle:check || true
 
-      # Verify rollout of translate service
-      - name: Verify rollout
+      # 4️⃣ Dependency scan
+      - name: Dependency Scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'table'
+          exit-code: '1'
+          severity: 'CRITICAL,HIGH'
+
+      # 5️⃣ CodeQL init
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: java
+
+      # 6️⃣ Build for CodeQL
+      - name: Build for CodeQL
+        run: ./mvnw clean compile
+
+      # 7️⃣ CodeQL analyze
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+
+      # 8️⃣ Run Unit Tests
+      - name: Run Unit Tests
+        run: ./mvnw test || true
+
+      # 9️⃣ Docker Hub login
+      - name: Log in to Docker Hub
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # 🔹 10️⃣ Build & Push Docker Image
+      - name: Build & Push Docker Image
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: |
+            anubhav1404/user-ai-service:${{ github.sha }}
+
+      # 🔹 11️⃣ Update deployment manifest
+      - name: Update deployment manifest
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
-          kubectl rollout status deployment/ai-deployment
+          sed -i "s|image: .*|image: anubhav1404/user-ai-service:${{ github.sha }}|g" kubernetes/ai-deployment.yaml
+
+      # 🔹 12️⃣ Commit and push manifest changes
+      - name: Commit and push manifest changes
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "actions@github.com"
+          git add kubernetes/ai-deployment.yaml
+          git diff --staged --quiet || git commit -m "CI: Update image tag to ${{ github.sha }}"
+          git push https://${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} HEAD:main
