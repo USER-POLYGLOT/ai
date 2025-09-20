@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
         - name: ai-service
-          image: anubhav1404/user-ai-service:b875979092495a1e850db47d9227cb437c93e99d
+          image: anubhav1404/user-ai-service:e0ed1d09e7a79c61fd2c97aa794949668e5209ef
           ports:
             - containerPort: 8081
           env:
