@@ -61,10 +61,14 @@ jobs:
       - name: Run Unit Tests
         run: ./mvnw test || true
         
-      - name: Secret Scan (Gitleaks)
-        uses: gitleaks/gitleaks-action@v2
+      - name: Secret Scan (Trivy)
+        uses: aquasecurity/trivy-action@master
         with:
-          args: detect --source . --no-git -v
+          scan-type: 'fs'
+          scan-ref: '.'
+          scanners: 'secret'
+          format: 'table'
+          exit-code: '1'
           
       # 9️⃣ Docker Hub login
       - name: Log in to Docker Hub
